@@ -1,14 +1,20 @@
-import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
-import { svelte } from '@sveltejs/vite-plugin-svelte'
+import { defineConfig, externalizeDepsPlugin } from "electron-vite";
+import { svelte } from "@sveltejs/vite-plugin-svelte";
+import path from "path";
 
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin()]
+    plugins: [externalizeDepsPlugin()],
   },
   preload: {
-    plugins: [externalizeDepsPlugin()]
+    plugins: [externalizeDepsPlugin()],
   },
   renderer: {
-    plugins: [svelte()]
-  }
-})
+    plugins: [svelte()],
+    resolve: {
+      alias: {
+        $lib: path.resolve("./src/renderer/src/lib"),
+      },
+    },
+  },
+});
