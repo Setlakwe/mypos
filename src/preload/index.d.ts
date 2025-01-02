@@ -5,8 +5,8 @@ declare global {
     electron: ElectronAPI
     api: unknown
     serialAPI: {
-      writeToPort: (message: string) => void;
-      onFromDevice: (callback: (data: string) => void) => void;
+      writeToPort: (message: string) => void
+      onFromDevice: (callback: (data: string) => void) => void
     }
   }
 }

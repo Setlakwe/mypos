@@ -12,9 +12,15 @@ if (process.contextIsolated) {
     contextBridge.exposeInMainWorld('electron', electronAPI)
     contextBridge.exposeInMainWorld('api', api)
     contextBridge.exposeInMainWorld('serialAPI', {
-      writeToPort: (message) => {ipcRenderer.send('write-serial', message);},
-      onFromDevice: (callback) => {ipcRenderer.on('from-device', (_event, data) => {callback(data);});},
-    });
+      writeToPort: (message) => {
+        ipcRenderer.send('write-serial', message)
+      },
+      onFromDevice: (callback) => {
+        ipcRenderer.on('from-device', (_event, data) => {
+          callback(data)
+        })
+      }
+    })
   } catch (error) {
     console.error(error)
   }
