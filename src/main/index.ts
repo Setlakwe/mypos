@@ -7,6 +7,12 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as usb from 'usb';
 import ReceiptPrinterEncoder from '@point-of-sale/receipt-printer-encoder'
+
+// Extended interface for USB endpoints that includes transfer method
+interface UsbEndpoint extends usb.Endpoint {
+  transfer(data: Buffer, callback: (error: Error | null) => void): void;
+}
+
 interface PrinterConfig {
   type: 'serial' | 'usb' | 'network';
   serial?: {
@@ -66,10 +72,19 @@ ipcMain.handle('printer-list-serial-ports', async () => {
   }
 });
 
+// Default network printer configuration for Windows Samba share
+const DEFAULT_NETWORK_CONFIG: PrinterConfig = {
+  type: 'network',
+  network: {
+    address: '\\\\localhost\\receipt',
+    port: 9100
+  }
+};
+
 ipcMain.handle('printer-list-usb-devices', async () => {
   try {
     const devices = usb.getDeviceList();
-    return devices
+    const printers = devices
       .filter(device => {
         // Check interface descriptors without opening the device
         try {
@@ -97,25 +112,55 @@ ipcMain.handle('printer-list-usb-devices', async () => {
           product: device.deviceDescriptor.iProduct
         };
       });
+
+    // If no USB printers found, return network printer as fallback
+    if (printers.length === 0) {
+      console.log('No USB printers found, suggesting network printer configuration');
+      return [{
+        vendorId: '0000',
+        productId: '0000',
+        manufacturer: 0,
+        product: 0,
+        isNetworkFallback: true,
+        description: 'Network Printer (Windows Shared Printer)'
+      }];
+    }
+
+    return printers;
   } catch (error) {
     console.error('Error listing USB devices:', error);
-    return [];
+    // Return network printer as fallback on error
+    return [{
+      vendorId: '0000',
+      productId: '0000',
+      manufacturer: 0,
+      product: 0,
+      isNetworkFallback: true,
+      description: 'Network Printer (Windows Shared Printer)'
+    }];
   }
+});
+
+// Modified to handle network printer fallback
+ipcMain.handle('printer-save-usb-config', async (_, config) => {
+  if (config.isNetworkFallback) {
+    // If this is our network fallback printer, save network configuration instead
+    saveConfig(DEFAULT_NETWORK_CONFIG);
+    return true;
+  }
+  
+  const printerConfig: PrinterConfig = {
+    type: 'usb',
+    usb: config
+  };
+  saveConfig(printerConfig);
+  return true;
 });
 
 ipcMain.handle('printer-save-serial-config', async (_, config) => {
   const printerConfig: PrinterConfig = {
     type: 'serial',
     serial: config
-  };
-  saveConfig(printerConfig);
-  return true;
-});
-
-ipcMain.handle('printer-save-usb-config', async (_, config) => {
-  const printerConfig: PrinterConfig = {
-    type: 'usb',
-    usb: config
   };
   saveConfig(printerConfig);
   return true;
@@ -136,6 +181,32 @@ ipcMain.handle('printer-get-config', () => {
   }
   return currentConfig;
 });
+
+// Create test print data using ESC/POS encoder
+function createTestPrintData(): Buffer {
+  const encoder = new ReceiptPrinterEncoder();
+  const now = new Date().toLocaleString();
+  
+  return encoder
+    .initialize()
+    .codepage('auto')
+    .align('center')
+    .bold(true)
+    .line('TEST PRINT')
+    .bold(false)
+    .rule()
+    .align('left')
+    .line(`Date: ${now}`)
+    .line('Connection Type: ' + (currentConfig?.type || 'Unknown'))
+    .newline()
+    .align('center')
+    .line('If you can read this,')
+    .line('printer is working correctly!')
+    .newline()
+    .newline()
+    .cut()
+    .encode();
+}
 
 async function closeSerialPort(): Promise<void> {
   if (serialPort && serialPort.isOpen) {
@@ -159,6 +230,8 @@ ipcMain.handle('printer-test-connection', async () => {
   }
 
   try {
+    const testData = createTestPrintData();
+
     switch (currentConfig.type) {
       case 'serial': {
         // Close any existing connection first
@@ -185,30 +258,114 @@ ipcMain.handle('printer-test-connection', async () => {
               reject(err);
             } else {
               console.log('Serial port opened successfully');
-              // send a escpos linefeed and cut command to printer
-              const encoder = new ReceiptPrinterEncoder(); 
-              const printdata = encoder
-                .initialize()
-                .codepage('auto')
-                .line('ESCPOS printer')
-                .rule()
-                .line('Serial port opened successfully')
-                .newline()
-                .newline()
-                .cut()
-                .encode();
-              writeToSerialPort(printdata);
+              writeToSerialPort(testData);
               resolve(true);
             }
           });
         });
       }
-      case 'network':
-        // Would implement network printer test
-        return true;
-      case 'usb':
-        // Would implement USB printer test
-        return true;
+      case 'network': {
+        const networkConfig = currentConfig.network;
+        if (!networkConfig) {
+          throw new Error('Invalid network configuration');
+        }
+
+        // For Windows shared printer (Samba), we'll test if the share exists
+        if (networkConfig.address.startsWith('\\\\')) {
+          try {
+            const testPath = networkConfig.address;
+            fs.writeFileSync(testPath, testData);
+            return true;
+          } catch (error) {
+            console.error('Error testing network printer:', error);
+            throw new Error(`Cannot access printer share: ${networkConfig.address}`);
+          }
+        }
+
+        // For network printers, implement TCP/IP printing
+        const net = require('net');
+        return new Promise((resolve, reject) => {
+          const client = new net.Socket();
+          client.connect(networkConfig.port, networkConfig.address, () => {
+            client.write(testData, (err) => {
+              if (err) {
+                reject(err);
+              } else {
+                client.end();
+                resolve(true);
+              }
+            });
+          });
+          
+          client.on('error', (err) => {
+            reject(err);
+          });
+        });
+      }
+      case 'usb': {
+        const usbConfig = currentConfig.usb;
+        if (!usbConfig) {
+          throw new Error('Invalid USB configuration');
+        }
+
+        // Find the USB device
+        const device = usb.findByIds(
+          parseInt(usbConfig.vendorId, 16),
+          parseInt(usbConfig.productId, 16)
+        );
+
+        if (!device) {
+          throw new Error('USB printer not found');
+        }
+
+        return new Promise((resolve, reject) => {
+          try {
+            device.open();
+            
+            // Check if device has interfaces
+            if (!device.interfaces || device.interfaces.length === 0) {
+              throw new Error('No USB interfaces found');
+            }
+
+            const iface = device.interfaces[0];
+            
+            // Claim the interface
+            if (iface.isKernelDriverActive()) {
+              iface.detachKernelDriver();
+            }
+            iface.claim();
+
+            // Find the out endpoint
+            const endpoint = iface.endpoints.find((ep) => {
+              return ep.direction === 'out';
+            });
+            
+            if (!endpoint) {
+              throw new Error('USB OUT endpoint not found');
+            }
+
+            // Send the test data using node-usb's raw transfer method
+            (endpoint as UsbEndpoint).transfer(testData, (err: Error | null) => {
+              if (err) {
+                reject(err);
+              } else {
+                resolve(true);
+              }
+              
+              // Release interface and close device
+              try {
+                iface.release(() => {
+                  device.close();
+                });
+              } catch (e) {
+                console.error('Error closing USB device:', e);
+              }
+            });
+          } catch (error) {
+            reject(error);
+          }
+        });
+      }
     }
   } catch (error) {
     console.error('Error testing connection:', error);
@@ -217,7 +374,7 @@ ipcMain.handle('printer-test-connection', async () => {
 });
 
 // We'll maintain a queue of messages to write
-const writeQueue: string[] = [];
+const writeQueue: Array<string | Buffer> = [];
 
 // Flag to indicate if we're currently writing
 let isWriting = false;
@@ -281,14 +438,23 @@ app.whenReady().then(async () => {
 // ────────────────────────────────────────────────────────────────────────────────
 //  IPC Listeners
 // ────────────────────────────────────────────────────────────────────────────────
-ipcMain.on("write-serial", (_event, message: string) => {
+ipcMain.on("write-serial", (_event, message: string | Buffer) => {
   writeToSerialPort(message);
 });
 
 /**
- * Send encoded data to printer via serial port
+ * Send encoded data to printer via serial port or network share
  */
-function writeToSerialPort(message: string) {
+function writeToSerialPort(message: string | Buffer) {
+  if (currentConfig?.type === 'network' && currentConfig.network?.address.startsWith('\\\\')) {
+    try {
+      fs.writeFileSync(currentConfig.network.address, message);
+      return;
+    } catch (error) {
+      console.error('Error writing to network printer:', error);
+      return;
+    }
+  }
   if (serialPort && serialPort.isOpen) {
     // Push the message to our queue
     writeQueue.push(message);
