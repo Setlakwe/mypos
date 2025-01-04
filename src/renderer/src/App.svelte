@@ -7,11 +7,8 @@ import Router from "svelte-spa-router";
 import About from "./pages/About.svelte";
 import Config from "./pages/Config.svelte";
 import { Button } from "$lib/components/ui/button";
-import { toast } from "svelte-sonner";
 import { Toaster } from "$lib/components/ui/sonner";
-
-import Sun from "lucide-svelte/icons/sun";
-import Moon from "lucide-svelte/icons/moon";
+import { push } from "svelte-spa-router";
 
 const routes = {
   "/": Home,
@@ -20,8 +17,8 @@ const routes = {
   "/config": Config,
 };
 
-const click = () => {
-  toast("Hello world");
+const navigate = (path: string) => {
+  push(path);
 };
 </script>
 
@@ -32,25 +29,33 @@ const click = () => {
     <div
       class="container flex flex-col items-start justify-between space-y-2 py-4 sm:flex-row sm:items-center sm:space-y-0 md:h-16"
     >
-      <div class="ml-auto flex w-full">
+      <div class="flex items-center space-x-4">
         <Button on:click={toggleMode} variant="outline" size="icon">☰</Button>
+        <h2 class="text-lg font-semibold">OmniPOS</h2>
       </div>
-      <h2 class="text-lg font-semibold">OmniPOS</h2>
-      <div class="ml-auto flex w-full space-x-2 sm:justify-end">
+
+      <div class="flex space-x-2">
+        <Button variant="ghost" on:click={() => navigate('/')}>Home</Button>
+        <Button variant="ghost" on:click={() => navigate('/about')}
+          >About</Button
+        >
+        <Button variant="ghost" on:click={() => navigate('/config')}
+          >Config</Button
+        >
+      </div>
+
+      <div class="flex space-x-2">
         <Button on:click={toggleMode} variant="outline" size="icon">
-          <Sun
-            class="h-[1.2rem] w-[1.2rem] rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0"
-          />
-          <Moon
-            class="absolute h-[1.2rem] w-[1.2rem] rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100"
-          />
+          <span class="dark:hidden">🌞</span>
+          <span class="hidden dark:inline">🌙</span>
           <span class="sr-only">Toggle theme</span>
         </Button>
       </div>
     </div>
   </div>
 
-  <Button on:click={click}>Show toast</Button>
-  <Router routes={routes}></Router>
+  <main class="container mx-auto p-4">
+    <Router routes={routes} />
+  </main>
   <Versions />
 </body>
